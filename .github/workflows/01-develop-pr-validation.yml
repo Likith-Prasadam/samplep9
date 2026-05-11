@@ -1,0 +1,259 @@
+name: '01: Develop - PR Validation'
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+    branches: [develop]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - '*.png'
+      - '*.jpg'
+      - '*.gif'
+
+concurrency:
+  group: develop-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+env:
+  NODE_VERSION: '20'
+  PNPM_VERSION: '10.13.1'
+
+jobs:
+  detect-changes:
+    name: 'Detect: Code Changes'
+    runs-on: ubuntu-latest
+    outputs:
+      code_changed: ${{ steps.check.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            const changed = files.some(f =>
+              f.filename.startsWith('src/') ||
+              f.filename.startsWith('public/') ||
+              /\.(tsx?|jsx?|json|css|scss)$/i.test(f.filename) ||
+              ['vite.config.ts','package.json','pnpm-lock.yaml','Dockerfile'].includes(f.filename)
+            );
+            core.setOutput('changed', changed ? 'true' : 'false');
+
+  # ------------------------------------------------
+  # 2) Validate Branch Name
+  # ------------------------------------------------
+  validate-branch-name:
+    name: 'Validate: Branch Name'
+    needs: detect-changes
+    runs-on: ubuntu-latest
+    if: needs.detect-changes.outputs.code_changed == 'true'
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const branch = context.payload.pull_request.head.ref;
+            const mapping = [
+              { re: /^feature\//i, label: 'feature' },
+              { re: /^fix\//i, label: 'bugfix' },
+              { re: /^hotfix\//i, label: 'hotfix' },
+              { re: /^refactor\//i, label: 'refactor' },
+              { re: /^docs\//i, label: 'docs' },
+              { re: /^perf\//i, label: 'perf' },
+              { re: /^chore\//i, label: 'chore' },
+              { re: /^test\//i, label: 'test' }
+            ];
+
+            const match = mapping.find(m => m.re.test(branch));
+            if (!match) {
+              core.setFailed(`❌ Invalid branch name: ${branch}. Use feature/, fix/, hotfix/, refactor/, docs/, perf/, chore/ or test/.`);
+              return;
+            }
+
+            // Add label based on branch type
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: [match.label]
+            });
+
+            // Auto-assign reviewers (simple strategy: map to team/people)
+            const reviewerMap = {
+              feature: ['yashpara9'],
+              bugfix: ['yashpara9'],
+              hotfix: ['yashpara9'],
+              refactor: ['yashpara9'],
+              docs: [],
+              perf: ['yashpara9'],
+              chore: ['yashpara9'],
+              test: ['yashpara9']
+            };
+
+            const reviewers = reviewerMap[match.label] || [];
+            if (reviewers.length) {
+              try {
+                await github.rest.pulls.requestReviewers({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: context.issue.number,
+                  reviewers
+                });
+              } catch (e) {
+                // ignore if permission denied or already requested
+                core.info('Could not request reviewers: ' + e.message);
+              }
+            }
+
+  setup:
+    name: 'Setup Environment & Cache'
+    needs: [detect-changes, validate-branch-name]
+    runs-on: ubuntu-latest
+    if: needs.detect-changes.outputs.code_changed == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      # Ensure Node is available before calling pnpm
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Install pnpm CLI
+      - name: Install pnpm CLI
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      # Query pnpm store path and expose as an output
+      - id: pnpm-store-path
+        name: Get pnpm store path
+        run: |
+          # get pnpm store path (silent). If it fails, set empty string.
+          store=$(pnpm store path --silent 2>/dev/null || echo "")
+          echo "store_path=$store" >> $GITHUB_OUTPUT
+
+      # Cache pnpm store only if we got a non-empty path
+      - name: Cache pnpm store
+        if: steps.pnpm-store-path.outputs.store_path != ''
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store-path.outputs.store_path }}
+          key: pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}-node-${{ env.NODE_VERSION }}
+          restore-keys: |
+            pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}-
+
+  security:
+    name: 'Security: Dependency Scan'
+    needs: detect-changes
+    runs-on: ubuntu-latest
+    if: needs.detect-changes.outputs.code_changed == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - run: pnpm install
+      - name: Run pnpm audit (warn only)
+        run: pnpm audit --audit-level moderate || true
+
+  # ------------------------------------------------
+  # 4) Lint only
+  # ------------------------------------------------
+  quality:
+    name: 'Quality: Lint Only'
+    needs: [detect-changes, validate-branch-name]
+    runs-on: ubuntu-latest
+    if: needs.detect-changes.outputs.code_changed == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - run: pnpm install --frozen-lockfile
+      - name: Run lint
+        run: pnpm run lint
+
+  build:
+    name: 'Build: Validation Only'
+    needs: [detect-changes, quality, security]
+    runs-on: ubuntu-latest
+    if: needs.detect-changes.outputs.code_changed == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+
+  # ------------------------------------------------
+  # 6) PR Summary + Metadata
+  # ------------------------------------------------
+  summary:
+    name: 'Summary: PR Status'
+    needs: [validate-branch-name, security, quality, build]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const artifactUrl = `${runUrl}/artifacts`;
+            const results = {
+              "Branch Name": "${{ needs.validate-branch-name.result || 'completed' }}",
+              "Security Scan": "${{ needs.security.result }}",
+              "Quality": "${{ needs.quality.result }}",
+              "Build": "${{ needs.build.result }}"
+            };
+
+            const icon = s => s === "success" ? "✅" : s === "failure" ? "❌" : "⚠️";
+
+            let table = "## 📝 PR Validation Summary\n\n| Check | Status |\n|-------|--------|\n";
+            for (const [k,v] of Object.entries(results)) {
+              table += `| ${k} | ${icon(v)} ${v} |\n`;
+            }
+
+            const info =
+              "## 📌 PR Information\n\n" +
+              `- **PR Number:** #${pr.number}\n` +
+              `- **Title:** ${pr.title}\n` +
+              `- **Author:** ${pr.user.login}\n` +
+              `- **Requested Reviewers:** ${
+                pr.requested_reviewers?.length ? pr.requested_reviewers.map(r => r.login).join(', ') : 'None'
+              }\n` +
+              `- **Run:** ${runUrl}\n` +
+              `- **Artifacts:** ${artifactUrl}\n\n---\n\n`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              body: info + table
+            });

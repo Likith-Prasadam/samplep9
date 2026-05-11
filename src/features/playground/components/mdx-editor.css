@@ -1,0 +1,56 @@
+/* css for react-markdown */
+.my-toolbar {
+  width: 100%;
+  max-height: 400px;
+}
+
+.my-toolbar button {
+  padding: 0.25rem;
+  border-radius: 0.125rem;
+  color: #f4f6fa;
+  background-color: transparent;
+  transition: all 0.2s ease;
+}
+
+.my-toolbar button:hover {
+  background-color: #f3f5f8;
+}
+
+.my-toolbar button.active,
+.my-toolbar button[aria-pressed='true'] {
+  background-color: #0d9488;
+  color: #ffffff;
+  box-shadow: 0 0 0 2px rgba(13, 148, 136, 0.3);
+}
+
+/* Fix list styles in the editor  */
+.prose ul {
+  /*Default bullet points for unordered lists */
+  list-style: disc;
+  /* Align with Tailwind's padding  */
+  /* padding-left: 1.5rem; */
+}
+
+.prose ol {
+  /* Decimal numbering for ordered lists  */
+  list-style: decimal;
+  /* Align with Tailwind's padding  */
+  /* padding-left: 1rem; */
+  white-space: normal;
+}
+
+/* Ensure content area is visible  */
+.prose {
+  /* Add padding to content area */
+  padding: 01rem;
+  width: auto;
+  /* Force visibility  */
+  opacity: 1 !important;
+  /* Ensure block display  */
+  display: block !important;
+  max-height: calc(100vh - 60px);
+}
+
+.prose h3 {
+  font-weight: bold; /* Ensures the heading is bold */
+}

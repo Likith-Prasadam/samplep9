@@ -1,0 +1,235 @@
+name: '01: UAT - PR Validation (develop → uat)'
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+    branches: [uat] # Only triggers when PR targets UAT branch
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - '*.png'
+      - '*.jpg'
+      - '*.gif'
+
+concurrency:
+  group: uat-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+env:
+  NODE_VERSION: '20'
+  PNPM_VERSION: '10.13.1'
+
+jobs:
+  # ------------------------------------------------
+  # 1) Validate Source Branch (must be develop)
+  # ------------------------------------------------
+  validate-source-branch:
+    name: 'Validate: Source Branch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const sourceBranch = pr.head.ref;
+            const targetBranch = pr.base.ref;
+
+            console.log(`Source: ${sourceBranch}, Target: ${targetBranch}`);
+
+            // Only allow develop → uat
+            if (targetBranch === 'uat' && sourceBranch !== 'develop') {
+              core.setFailed(`❌ UAT PRs must be from 'develop' branch. Current source: '${sourceBranch}'`);
+              
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                body: `## ❌ Invalid Source Branch\n\n` +
+                      `UAT environment only accepts PRs from **develop** branch.\n\n` +
+                      `- **Current Source:** \`${sourceBranch}\`\n` +
+                      `- **Expected Source:** \`develop\`\n` +
+                      `- **Target:** \`${targetBranch}\`\n\n` +
+                      `Please close this PR and create a new one from develop branch.`
+              });
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              body: `## ✅ Valid Source Branch\n\n` +
+                    `PR from **develop** → **uat** is valid. Proceeding with validation...`
+            });
+
+  detect-changes:
+    name: 'Detect: Code Changes'
+    needs: validate-source-branch
+    runs-on: ubuntu-latest
+    outputs:
+      code_changed: ${{ steps.check.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            const changed = files.some(f =>
+              f.filename.startsWith('src/') ||
+              f.filename.startsWith('public/') ||
+              /\.(tsx?|jsx?|json|css|scss)$/i.test(f.filename) ||
+              ['vite.config.ts','package.json','pnpm-lock.yaml','Dockerfile'].includes(f.filename)
+            );
+            core.setOutput('changed', changed ? 'true' : 'false');
+
+  setup:
+    name: 'Setup Environment & Cache'
+    needs: [validate-source-branch, detect-changes]
+    runs-on: ubuntu-latest
+    if: needs.detect-changes.outputs.code_changed == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install pnpm CLI
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - id: pnpm-store-path
+        name: Get pnpm store path
+        run: |
+          store=$(pnpm store path --silent 2>/dev/null || echo "")
+          echo "store_path=$store" >> $GITHUB_OUTPUT
+
+      - name: Cache pnpm store
+        if: steps.pnpm-store-path.outputs.store_path != ''
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store-path.outputs.store_path }}
+          key: pnpm-uat-${{ hashFiles('**/pnpm-lock.yaml') }}-node-${{ env.NODE_VERSION }}
+          restore-keys: |
+            pnpm-uat-${{ hashFiles('**/pnpm-lock.yaml') }}-
+
+      # Use the explicit pnpm store cache above; avoid using setup-node's
+      # built-in `cache: 'pnpm'` here which can try to save non-existent
+      # paths during the post-step and fail the job. See GitHub Actions
+      # path validation errors when the package manager store isn't present.
+
+  security:
+    name: 'Security: Dependency Scan'
+    needs: detect-changes
+    runs-on: ubuntu-latest
+    if: needs.detect-changes.outputs.code_changed == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - run: pnpm install
+      - name: Run pnpm audit (warn only)
+        run: pnpm audit --audit-level moderate || true
+
+  quality:
+    name: 'Quality: Lint'
+    needs: [detect-changes, validate-source-branch]
+    runs-on: ubuntu-latest
+    if: needs.detect-changes.outputs.code_changed == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - run: pnpm install --frozen-lockfile
+      - name: Run lint
+        run: pnpm run lint
+
+  build:
+    name: 'Build: UAT Validation'
+    needs: [detect-changes, quality, security]
+    runs-on: ubuntu-latest
+    if: needs.detect-changes.outputs.code_changed == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - run: pnpm install --frozen-lockfile
+      - name: Build with UAT environment variables
+        run: pnpm run build
+        env:
+          VITE_GRAPHQL_ENDPOINT: ${{ secrets.VITE_GRAPHQL_ENDPOINT || 'http://54.226.21.206:8080/graphql' }}
+          VITE_SSE_ENDPOINT_URL: ${{ secrets.VITE_SSE_ENDPOINT_URL || 'http://54.226.21.206:8080/api/notifications/stream' }}
+          VITE_CHAT_API_URL: ${{ secrets.VITE_CHAT_API_URL || 'http://54.226.21.206:8080/api/chat/stream' }}
+          VITE_IMAGE_CHAT_API_URL: ${{ secrets.VITE_IMAGE_CHAT_API_URL || 'http://54.226.21.206:8080/api/claude-chat/stream' }}
+
+  summary:
+    name: 'Summary: PR Status'
+    needs: [validate-source-branch, security, quality, build]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+
+            const results = {
+              "Source Branch Validation": "${{ needs.validate-source-branch.result }}",
+              "Security Scan": "${{ needs.security.result }}",
+              "Quality (Lint)": "${{ needs.quality.result }}",
+              "Build (UAT)": "${{ needs.build.result }}"
+            };
+
+            const icon = s => s === "success" ? "✅" : s === "failure" ? "❌" : s === "skipped" ? "⏭️" : "⚠️";
+
+            let table = "## 📝 UAT PR Validation Summary\n\n| Check | Status |\n|-------|--------|\n";
+            for (const [k,v] of Object.entries(results)) {
+              table += `| ${k} | ${icon(v)} ${v} |\n`;
+            }
+
+            const info =
+              "## 📌 UAT PR Information\n\n" +
+              `- **Environment:** UAT (User Acceptance Testing)\n` +
+              `- **PR Number:** #${pr.number}\n` +
+              `- **Title:** ${pr.title}\n` +
+              `- **Source:** \`${pr.head.ref}\` → **Target:** \`${pr.base.ref}\`\n` +
+              `- **Author:** ${pr.user.login}\n` +
+              `- **Run:** ${runUrl}\n\n---\n\n`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              body: info + table
+            });

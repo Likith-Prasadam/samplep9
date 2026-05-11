@@ -1,0 +1,384 @@
+name: '02: Develop → DEV Environment (Deploy)'
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    types: [closed]
+    branches: [develop]
+
+concurrency:
+  group: develop-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '20'
+  PNPM_VERSION: '10.13.1'
+  IMAGE_NAME: p9-spectra2.0-dev-ui
+  AWS_REGION: us-east-1
+  AWS_ECR_REGISTRY: 891146181139.dkr.ecr.us-east-1.amazonaws.com/p9-spectra2.0-dev-ui
+  EC2_HOST: 34.193.107.130
+  EC2_USERNAME: ubuntu
+
+jobs:
+  validate-deployment:
+    name: 'Validate: Deployment'
+    runs-on: ubuntu-latest
+    outputs:
+      should_deploy: ${{ steps.check.outputs.deploy }}
+    steps:
+      - id: check
+        run: |
+          if [[ "${{ github.event_name }}" == "push" || "${{ github.event.pull_request.merged }}" == "true" ]]; then
+            echo "deploy=true" >> $GITHUB_OUTPUT
+          else
+            echo "deploy=false" >> $GITHUB_OUTPUT
+          fi
+
+  security:
+    name: 'Security: Dependency Scan (warn)'
+    needs: validate-deployment
+    runs-on: ubuntu-latest
+    if: needs.validate-deployment.outputs.should_deploy == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      - run: pnpm install
+      - name: pnpm audit (warn)
+        run: pnpm audit --audit-level moderate || true
+
+  cache-setup:
+    name: 'Cache pnpm'
+    needs: [security, validate-deployment]
+    runs-on: ubuntu-latest
+    if: needs.validate-deployment.outputs.should_deploy == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: ~/.pnpm-store
+          key: pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}-node-${{ env.NODE_VERSION }}
+          restore-keys: |
+            pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}-
+
+  lint:
+    name: 'Lint'
+    needs: [cache-setup, validate-deployment]
+    runs-on: ubuntu-latest
+    if: needs.validate-deployment.outputs.should_deploy == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      - run: pnpm install
+      - run: pnpm run lint
+
+  build:
+    name: 'Build: Production'
+    needs: [lint, validate-deployment]
+    runs-on: ubuntu-latest
+    if: needs.validate-deployment.outputs.should_deploy == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      - run: pnpm install
+      - name: Build App
+        run: pnpm run build
+        env:
+          VITE_SSE_ENDPOINT_URL: 'https://api-load-test.p9sphere.com/api/v1/notifications/sse'
+          VITE_CHAT_API_URL: 'https://api-load-test.p9sphere.com/api/v1/chat/completions'
+          VITE_IMAGE_CHAT_API_URL: 'https://api-demo.p9sphere.com/api/claude-chat/stream'
+          VITE_SMART_MANUFACTURING_API_URL: 'https://spectra-manufacture.p9sphere.com/process-video'
+          VITE_GRAPHQL_ENDPOINT: 'https://api-load-test.p9sphere.com/api/v1/graphql'
+          VITE_REST_API_URL: 'https://api-load-test.p9sphere.com/'
+          VITE_PROCESS_VIDEO_API_URL: 'https://video-processing.p9sphere.com/api/v1/process_video'
+          VITE_NOTIFICATIONS_STATUS_URL: 'https://api-load-test.p9sphere.com/api/v1/notifications/status'
+          VITE_SEMANTIC_SEARCH_API_URL: 'https://api-load-test.p9sphere.com/api/v1/search/semantic'
+          VITE_TIMELINE_DENSITY_API_URL: 'https://api-load-test.p9sphere.com/api/v1/timeline/density'
+          VITE_TIMELINE_WINDOW_API_URL: 'https://api-load-test.p9sphere.com/api/v1/timeline/window'
+          VITE_TIMELINE_TIMELINE_RANGE_API_URL: 'https://api-load-test.p9sphere.com/api/v1/timeline/range'
+      # Artifact upload removed - Docker build will rebuild from source to avoid storage quota issues
+
+  docker-build-aws:
+    name: 'AWS Docker: Build & Push'
+    needs: [build, validate-deployment]
+    runs-on: ubuntu-latest
+    if: needs.validate-deployment.outputs.should_deploy == 'true'
+    outputs:
+      image_tag: ${{ steps.meta.outputs.sha_short }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+      - run: pnpm install
+      - name: Build App for Docker
+        run: pnpm run build
+        env:
+          VITE_SSE_ENDPOINT_URL: 'https://api-load-test.p9sphere.com/api/v1/notifications/sse'
+          VITE_CHAT_API_URL: 'https://api-load-test.p9sphere.com/api/v1/chat/completions'
+          VITE_IMAGE_CHAT_API_URL: 'https://api-demo.p9sphere.com/api/claude-chat/stream'
+          VITE_SMART_MANUFACTURING_API_URL: 'https://spectra-manufacture.p9sphere.com/process-video'
+          VITE_GRAPHQL_ENDPOINT: 'https://api-load-test.p9sphere.com/api/v1/graphql'
+          VITE_REST_API_URL: 'https://api-load-test.p9sphere.com/'
+          VITE_PROCESS_VIDEO_API_URL: 'https://video-processing.p9sphere.com/api/v1/process_video'
+          VITE_NOTIFICATIONS_STATUS_URL: 'https://api-load-test.p9sphere.com/api/v1/notifications/status'
+          VITE_SEMANTIC_SEARCH_API_URL: 'https://api-load-test.p9sphere.com/api/v1/search/semantic'
+          VITE_TIMELINE_DENSITY_API_URL: 'https://api-load-test.p9sphere.com/api/v1/timeline/density'
+          VITE_TIMELINE_WINDOW_API_URL: 'https://api-load-test.p9sphere.com/api/v1/timeline/window'
+          VITE_TIMELINE_TIMELINE_RANGE_API_URL: 'https://api-load-test.p9sphere.com/api/v1/timeline/range'
+      - name: Verify build output
+        run: |
+          echo "Checking dist folder..."
+          ls -la dist/
+          echo "Dist folder size:"
+          du -sh dist/
+          if [ ! -f "dist/index.html" ]; then
+            echo "ERROR: dist/index.html not found!"
+            exit 1
+          fi
+          echo "✅ Build artifacts verified"
+      - name: Generate image metadata
+        id: meta
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+      - uses: docker/setup-buildx-action@v3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.AWS_ECR_REGISTRY }}:dev-latest
+            ${{ env.AWS_ECR_REGISTRY }}:dev-${{ steps.meta.outputs.sha_short }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-dev-aws:
+    name: 'Deploy: DEV (EC2) with Rollback'
+    needs: [docker-build-aws, validate-deployment]
+    runs-on: ubuntu-latest
+    if: needs.validate-deployment.outputs.should_deploy == 'true'
+    environment:
+      name: development
+    steps:
+      - name: Get Image Tag
+        id: get_tag
+        run: echo "image_tag=${{ needs.docker-build-aws.outputs.image_tag }}" >> $GITHUB_OUTPUT
+
+      - name: Deploy to AWS EC2
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          AWS_REGION: ${{ env.AWS_REGION }}
+          AWS_ECR_REGISTRY: ${{ env.AWS_ECR_REGISTRY }}
+          NEW_IMAGE_TAG: dev-${{ steps.get_tag.outputs.image_tag }}
+        with:
+          host: ${{ env.EC2_HOST }}
+          username: ${{ env.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          envs: IMAGE_NAME,AWS_REGION,AWS_ECR_REGISTRY,NEW_IMAGE_TAG
+          script: |
+            set -e
+
+            # Debug: Show what we received
+            echo "🔍 Environment Variables:"
+            echo "  IMAGE_NAME: ${IMAGE_NAME:-NOT_SET}"
+            echo "  AWS_REGION: ${AWS_REGION:-NOT_SET}"
+            echo "  AWS_ECR_REGISTRY: ${AWS_ECR_REGISTRY:-NOT_SET}"
+            echo "  NEW_IMAGE_TAG: ${NEW_IMAGE_TAG:-NOT_SET}"
+
+            # Extract region from ECR registry URL if AWS_REGION is not set
+            if [ -z "$AWS_REGION" ] || [ "$AWS_REGION" = "NOT_SET" ]; then
+              echo "⚠️  AWS_REGION not set, extracting from ECR registry URL..."
+              # Extract region from format: 123456789.dkr.ecr.us-east-1.amazonaws.com/repo
+              AWS_REGION=$(echo "$AWS_ECR_REGISTRY" | sed -n 's/.*ecr\.\([^.]*\)\..*/\1/p')
+              if [ -z "$AWS_REGION" ]; then
+                AWS_REGION="us-east-1"
+                echo "⚠️  Could not extract region, defaulting to: $AWS_REGION"
+              else
+                echo "✅ Extracted region: $AWS_REGION"
+              fi
+            fi
+
+            CONTAINER_NAME="${IMAGE_NAME}"
+            NEW_TAG="${NEW_IMAGE_TAG}"
+            FULL_IMAGE="${AWS_ECR_REGISTRY}:${NEW_TAG}"
+            PORT_MAPPING="8081:3000"
+
+            # Extract ECR domain (remove repository name if present)
+            ECR_DOMAIN=$(echo "${AWS_ECR_REGISTRY}" | sed 's|/.*||')
+            echo "🔍 ECR Domain: $ECR_DOMAIN"
+
+            echo ""
+            echo "🚀 Deploying $FULL_IMAGE"
+            echo "📍 Region: $AWS_REGION"
+            echo ""
+
+            # Configure AWS CLI region
+            export AWS_DEFAULT_REGION="${AWS_REGION}"
+            export AWS_REGION="${AWS_REGION}"
+
+            # Verify AWS configuration
+            echo "🔍 Verifying AWS credentials..."
+            echo "  Checking: aws sts get-caller-identity"
+
+            if aws sts get-caller-identity 2>&1; then
+              echo "✅ AWS credentials verified"
+            else
+              echo "⚠️  AWS credentials check failed, but continuing..."
+              echo "💡 This might work anyway if IAM role is properly attached"
+            fi
+            echo ""
+
+            # ECR Login
+            echo "🔐 Logging into ECR..."
+            echo "  Registry: $ECR_DOMAIN"
+            echo "  Getting password from AWS ECR..."
+
+            ECR_PASSWORD=$(aws ecr get-login-password --region "${AWS_REGION}" 2>&1)
+            if [ $? -ne 0 ]; then
+              echo "❌ Failed to get ECR password"
+              echo "$ECR_PASSWORD"
+              exit 1
+            fi
+
+            echo "  Logging into Docker registry..."
+            if ! echo "$ECR_PASSWORD" | docker login --username AWS --password-stdin "${ECR_DOMAIN}"; then
+              echo "❌ Docker login to ECR failed"
+              exit 1
+            fi
+            echo "✅ ECR login successful"
+
+            # Get old image for rollback
+            OLD_IMAGE_ID=$(docker inspect --format="{{.Image}}" $CONTAINER_NAME 2>/dev/null || echo "none")
+            echo "📦 Current Image: $OLD_IMAGE_ID"
+
+            # Pull new image
+            echo "⬇️ Pulling new image..."
+            docker pull $FULL_IMAGE
+
+            # Stop and remove old container
+            echo "🛑 Stopping old container..."
+            docker stop $CONTAINER_NAME || true
+            docker rm $CONTAINER_NAME || true
+
+            # Start new container
+            echo "▶️ Starting new container..."
+            CONTAINER_ID=$(docker run -d -p $PORT_MAPPING --name $CONTAINER_NAME --restart always $FULL_IMAGE)
+            echo "📦 Container ID: $CONTAINER_ID"
+
+            # Check if container is running - give it a few seconds
+            echo "⏳ Waiting for container to initialize..."
+            sleep 5
+
+            # Check container status
+            CONTAINER_STATUS=$(docker ps -a --filter "name=$CONTAINER_NAME" --format "{{.Status}}" 2>/dev/null || echo "not found")
+            echo "📊 Container status: $CONTAINER_STATUS"
+
+            if ! docker ps --filter "name=$CONTAINER_NAME" --format "{{.Names}}" | grep -q "^${CONTAINER_NAME}$"; then
+              echo "❌ Container failed to start or is not running!"
+              echo ""
+              echo "📋 Full container inspect:"
+              docker inspect $CONTAINER_NAME 2>&1 || true
+              echo ""
+              echo "📋 Container logs (last 100 lines):"
+              docker logs --tail 100 $CONTAINER_NAME 2>&1 || true
+              echo ""
+
+              # Rollback
+              if [ "$OLD_IMAGE_ID" != "none" ]; then
+                echo "🔄 Rolling back to previous image..."
+                docker rm -f $CONTAINER_NAME 2>/dev/null || true
+                docker run -d -p $PORT_MAPPING --name $CONTAINER_NAME --restart always $OLD_IMAGE_ID
+                echo "✅ Rolled back to previous version"
+              fi
+              exit 1
+            fi
+
+            echo "✅ Container is running"
+
+            # Wait for app to be ready
+            echo "⏳ Waiting for application to be ready..."
+            sleep 20
+
+            # Health check with retries
+            RETRIES=10
+            COUNT=0
+            HEALTH_CHECK_PASSED=false
+
+            while [ $COUNT -lt $RETRIES ]; do
+              COUNT=$((COUNT+1))
+              echo "🔍 Health check attempt $COUNT/$RETRIES..."
+
+              if curl --silent --fail --max-time 5 http://localhost:8081/ > /dev/null 2>&1; then
+                echo "✅ Health check passed!"
+                HEALTH_CHECK_PASSED=true
+                break
+              fi
+
+              # Check if container is still running
+              if ! docker ps | grep -q $CONTAINER_NAME; then
+                echo "❌ Container stopped unexpectedly!"
+                echo "📋 Container logs:"
+                docker logs --tail 50 $CONTAINER_NAME || true
+                break
+              fi
+
+              if [ $COUNT -lt $RETRIES ]; then
+                echo "⏳ Waiting 5s before retry..."
+                sleep 5
+              fi
+            done
+
+            # Final validation
+            if [ "$HEALTH_CHECK_PASSED" = true ]; then
+              echo "✅ Deployment Successful!"
+              echo "🧹 Cleaning up old images..."
+              docker image prune -f
+            else
+              echo "❌ Deployment Failed - Health check did not pass"
+              echo "📋 Final container logs:"
+              docker logs --tail 100 $CONTAINER_NAME || true
+
+              # Rollback
+              if [ "$OLD_IMAGE_ID" != "none" ]; then
+                echo "🔄 Rolling back to previous image..."
+                docker stop $CONTAINER_NAME || true
+                docker rm $CONTAINER_NAME || true
+                docker run -d -p $PORT_MAPPING --name $CONTAINER_NAME --restart always $OLD_IMAGE_ID
+                echo "✅ Rollback Complete!"
+              else
+                echo "💀 No previous image available for rollback"
+              fi
+              exit 1
+            fi

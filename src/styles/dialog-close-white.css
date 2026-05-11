@@ -1,0 +1,12 @@
+.dark .dialog-close,
+.dialog-close {
+  color: #fff !important;
+}
+
+/* If your dialog close button uses a specific class or data attribute, adjust the selector accordingly. */
+
+/* Example for shadcn/ui Dialog: */
+[data-state='open'] > button.absolute.top-4.right-4,
+[data-state='open'] > .absolute.top-4.right-4 {
+  color: #fff !important;
+}

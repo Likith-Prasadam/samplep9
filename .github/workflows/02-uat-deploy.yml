@@ -1,0 +1,240 @@
+name: '02: UAT → UAT Environment (Deploy)'
+
+on:
+  push:
+    branches: [uat]
+
+concurrency:
+  group: uat-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '20'
+  PNPM_VERSION: '10.13.1'
+  IMAGE_NAME: p9-spectra2.0-uat-ui # Separate UAT image name
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  AWS_ECR_REGISTRY: ${{ secrets.AWS_ECR_REGISTRY_UAT }}
+
+jobs:
+  # --------------------------------------------------
+  # VALIDATE
+  # --------------------------------------------------
+  validate-deployment:
+    name: 'Validate: UAT Deployment'
+    runs-on: ubuntu-latest
+    outputs:
+      should_deploy: ${{ steps.check.outputs.deploy }}
+    steps:
+      - id: check
+        run: |
+          if [[ "${{ github.event_name }}" == "push" || "${{ github.event.pull_request.merged }}" == "true" ]]; then
+            echo "deploy=true" >> $GITHUB_OUTPUT
+          else
+            echo "deploy=false" >> $GITHUB_OUTPUT
+          fi
+
+  # --------------------------------------------------
+  # SECURITY
+  # --------------------------------------------------
+  security:
+    name: 'Security: Dependency Scan (warn)'
+    needs: validate-deployment
+    runs-on: ubuntu-latest
+    if: needs.validate-deployment.outputs.should_deploy == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install
+      - run: pnpm audit --audit-level moderate || true
+
+  # --------------------------------------------------
+  # CACHE
+  # --------------------------------------------------
+  cache-setup:
+    name: 'Cache pnpm'
+    needs: [security, validate-deployment]
+    runs-on: ubuntu-latest
+    if: needs.validate-deployment.outputs.should_deploy == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: ~/.pnpm-store
+          key: pnpm-uat-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: pnpm-uat-
+
+  # --------------------------------------------------
+  # LINT
+  # --------------------------------------------------
+  lint:
+    name: 'Lint'
+    needs: [cache-setup, validate-deployment]
+    runs-on: ubuntu-latest
+    if: needs.validate-deployment.outputs.should_deploy == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install
+      - run: pnpm run lint
+
+  # --------------------------------------------------
+  # BUILD (UAT)
+  # --------------------------------------------------
+  build:
+    name: 'Build: UAT Production'
+    needs: [lint, validate-deployment]
+    runs-on: ubuntu-latest
+    if: needs.validate-deployment.outputs.should_deploy == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install
+      - name: Build App
+        run: pnpm run build
+        env:
+          VITE_SSE_ENDPOINT_URL: https://spectra-uat-backend.p9sphere.com/api/v1/notifications/sse
+          VITE_CHAT_API_URL: https://spectra-uat-backend.p9sphere.com/api/v1/chat/completions
+          VITE_IMAGE_CHAT_API_URL: https://spectra-uat-backend.p9sphere.com/api/claude-chat/stream
+          VITE_SMART_MANUFACTURING_API_URL: https://spectra-uat-backend.p9sphere.com/process-video
+          VITE_GRAPHQL_ENDPOINT: https://spectra-uat-backend.p9sphere.com/api/v1/graphql
+          VITE_REST_API_URL: https://spectra-uat-backend.p9sphere.com/
+          VITE_PROCESS_VIDEO_API_URL: https://video-processing.p9sphere.com/api/v1/process_video
+          VITE_NOTIFICATIONS_STATUS_URL: https://spectra-uat-backend.p9sphere.com/api/v1/notifications/status
+          VITE_SEMANTIC_SEARCH_API_URL: 'https://spectra-uat-backend.p9sphere.com/api/v1/search/semantic'
+  # --------------------------------------------------
+  # DOCKER BUILD & PUSH (WITH SECOND BUILD)
+  # --------------------------------------------------
+  docker-build-aws:
+    name: 'AWS Docker: Build & Push (UAT)'
+    needs: [build, validate-deployment]
+    runs-on: ubuntu-latest
+    if: needs.validate-deployment.outputs.should_deploy == 'true'
+    outputs:
+      image_tag: ${{ steps.meta.outputs.sha_short }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install
+
+      - name: Build App for Docker
+        run: pnpm run build
+        env:
+          VITE_SSE_ENDPOINT_URL: https://spectra-uat-backend.p9sphere.com/api/v1/notifications/sse
+          VITE_CHAT_API_URL: https://spectra-uat-backend.p9sphere.com/api/v1/chat/completions
+          VITE_IMAGE_CHAT_API_URL: https://spectra-uat-backend.p9sphere.com/api/claude-chat/stream
+          VITE_SMART_MANUFACTURING_API_URL: https://spectra-uat-backend.p9sphere.com/process-video
+          VITE_GRAPHQL_ENDPOINT: https://spectra-uat-backend.p9sphere.com/api/v1/graphql
+          VITE_REST_API_URL: https://spectra-uat-backend.p9sphere.com/
+          VITE_PROCESS_VIDEO_API_URL: https://video-processing.p9sphere.com/api/v1/process_video
+          VITE_NOTIFICATIONS_STATUS_URL: https://spectra-uat-backend.p9sphere.com/api/v1/notifications/status
+          VITE_SEMANTIC_SEARCH_API_URL: 'https://spectra-uat-backend.p9sphere.com/api/v1/search/semantic'
+
+      - name: Generate image metadata
+        id: meta
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.AWS_ECR_REGISTRY }}:uat-latest
+            ${{ env.AWS_ECR_REGISTRY }}:uat-${{ steps.meta.outputs.sha_short }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # --------------------------------------------------
+  # DEPLOY WITH HEALTH CHECK + ROLLBACK
+  # --------------------------------------------------
+  deploy-uat-aws:
+    name: 'Deploy: UAT (EC2) with Rollback'
+    needs: [docker-build-aws, validate-deployment]
+    runs-on: ubuntu-latest
+    if: needs.validate-deployment.outputs.should_deploy == 'true'
+    steps:
+      - name: Deploy to AWS EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.UAT_EC2_HOST }}
+          username: ${{ secrets.UAT_EC2_USERNAME }}
+          key: ${{ secrets.UAT_EC2_SSH_KEY }}
+          port: 22
+          script: |
+            set -e
+
+            CONTAINER_NAME="${{ env.IMAGE_NAME }}"
+            NEW_TAG="uat-${{ needs.docker-build-aws.outputs.image_tag }}"
+            FULL_IMAGE="${{ env.AWS_ECR_REGISTRY }}:$NEW_TAG"
+            PORT_MAPPING="8080:3000"
+
+            aws ecr get-login-password --region ${{ env.AWS_REGION }} \
+              | docker login --username AWS --password-stdin ${{ env.AWS_ECR_REGISTRY }}
+
+            OLD_IMAGE_ID=$(docker inspect --format="{{.Image}}" $CONTAINER_NAME 2>/dev/null || echo "none")
+
+            docker pull $FULL_IMAGE
+            docker stop $CONTAINER_NAME || true
+            docker rm $CONTAINER_NAME || true
+            docker run -d -p $PORT_MAPPING --name $CONTAINER_NAME --restart always $FULL_IMAGE
+
+            echo "⏳ Waiting 15s for health check..."
+            sleep 15
+
+            RETRIES=6
+            COUNT=0
+            until curl --silent --fail http://localhost:8080/ || [ $COUNT -ge $RETRIES ]; do
+              COUNT=$((COUNT+1))
+              echo "Waiting... ($COUNT/$RETRIES)"
+              sleep 5
+            done
+
+            if curl --silent --fail http://localhost:8080/; then
+              echo "✅ UAT Deployment Successful"
+              docker image prune -f
+            else
+              echo "❌ Deployment Failed — Rolling back..."
+              if [ "$OLD_IMAGE_ID" != "none" ]; then
+                docker stop $CONTAINER_NAME || true
+                docker rm $CONTAINER_NAME || true
+                docker run -d -p $PORT_MAPPING --name $CONTAINER_NAME --restart always $OLD_IMAGE_ID
+                echo "🔄 Rollback Complete!"
+                exit 1
+              else
+                echo "💀 No previous image to rollback to"
+                exit 1
+              fi
+            fi

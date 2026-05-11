@@ -1,0 +1,324 @@
+.tl-timeline {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Light theme - explicit rules */
+html:not(.dark) .tl-timeline {
+  background-color: rgba(255, 255, 255, 0.9) !important;
+}
+
+.tl-timeline {
+  background-color: rgba(255, 255, 255, 0.9) !important;
+}
+
+/* Hide the top timestamp (above title) */
+.tl-timegroup-message,
+.tl-timemarker-time,
+.tl-headline-date {
+  display: none !important;
+}
+
+.tl-timemarker {
+  background-color: rgba(249, 250, 251, 0.95) !important;
+  border-color: rgba(209, 213, 219, 0.6) !important;
+}
+
+.tl-timenav {
+  background-color: rgba(249, 250, 251, 0.95) !important;
+  border-top: 1px solid rgba(209, 213, 219, 0.5) !important;
+}
+
+.tl-timenav-slider {
+  background-color: rgba(255, 255, 255, 0.8) !important;
+}
+
+.tl-timeaxis {
+  background-color: rgba(249, 250, 251, 0.98) !important;
+}
+
+.tl-timeaxis-tick {
+  border-color: rgba(209, 213, 219, 0.4) !important;
+}
+
+.tl-timeaxis-tick .tl-timeaxis-tick-text {
+  color: #6b7280 !important;
+}
+
+.tl-menubar {
+  background-color: rgba(249, 250, 251, 0.98) !important;
+  border-bottom-color: rgba(209, 213, 219, 0.5) !important;
+}
+
+.tl-menubar-button {
+  color: #374151 !important;
+  background-color: transparent !important;
+}
+
+.tl-menubar-button:hover {
+  background-color: rgba(229, 231, 235, 0.6) !important;
+  color: #111827 !important;
+}
+
+/* Light theme - explicit container styles */
+html:not(.dark) .tl-timemarker-content-container {
+  background-color: rgba(255, 255, 255, 0.98) !important;
+  border-color: rgba(229, 231, 235, 0.5) !important;
+}
+
+html:not(.dark)
+  .tl-timemarker-content-container
+  .tl-timemarker-content
+  h2.tl-headline {
+  color: #111827 !important;
+}
+
+html:not(.dark) .tl-timemarker-content-container .tl-timemarker-text p {
+  color: #374151 !important;
+}
+
+.dark .tl-timeline {
+  background-color: rgba(31, 41, 55, 0.5) !important;
+}
+
+.dark .tl-timemarker {
+  background-color: rgba(55, 65, 81, 0.8) !important;
+  border-color: rgba(107, 114, 128, 0.5) !important;
+}
+
+.dark .tl-timemarker-content-container {
+  background-color: rgba(31, 41, 55, 0.9) !important;
+  border-color: rgba(107, 114, 128, 0.3) !important;
+}
+
+.dark .tl-timemarker-content-container .tl-timemarker-content h2.tl-headline {
+  color: #ffffff !important;
+}
+
+.dark .tl-timemarker-content-container .tl-timemarker-text p {
+  color: #d1d5db !important;
+}
+
+.dark .tl-timenav {
+  background-color: rgba(17, 24, 39, 0.8) !important;
+  border-top: 1px solid rgba(75, 85, 99, 0.4) !important;
+}
+
+.dark .tl-timenav-slider {
+  background-color: rgba(31, 41, 55, 0.6) !important;
+}
+
+/* Dark theme - entire timeline axis uniform color */
+.dark .tl-timeaxis {
+  background-color: rgba(107, 114, 128, 0.3) !important;
+}
+
+.dark .tl-timeaxis-background {
+  background-color: rgba(107, 114, 128, 0.3) !important;
+}
+
+.dark .tl-timeaxis-content-container {
+  background-color: rgba(107, 114, 128, 0.3) !important;
+}
+
+.dark .tl-timeaxis-tick {
+  border-color: rgba(107, 114, 128, 0.3) !important;
+  background-color: rgba(107, 114, 128, 0.3) !important;
+}
+
+.dark .tl-timeaxis-tick .tl-timeaxis-tick-text {
+  color: #ffffff !important;
+}
+
+.dark .tl-timeaxis-major,
+.dark .tl-timeaxis-minor {
+  background-color: rgba(107, 114, 128, 0.3) !important;
+}
+
+.dark .tl-menubar {
+  background-color: rgba(31, 41, 55, 0.9) !important;
+  border-bottom-color: rgba(107, 114, 128, 0.3) !important;
+}
+
+.dark .tl-menubar-button {
+  color: #d1d5db !important;
+  background-color: transparent !important;
+}
+
+.dark .tl-menubar-button:hover {
+  background-color: rgba(55, 65, 81, 0.5) !important;
+  color: #ffffff !important;
+}
+
+/* Dark theme timeline header/title styling */
+.dark .tl-headline {
+  color: #ffffff !important;
+}
+
+.dark .tl-timeglider-title h1,
+.dark .tl-timeglider-title h2 {
+  color: #ffffff !important;
+}
+
+.dark .tl-timeglider-title p {
+  color: #9ca3af !important;
+}
+
+.timeline-container {
+  border-radius: 0 0 0.5rem 0.5rem;
+  overflow: hidden;
+  position: relative;
+  contain: layout;
+}
+
+.tl-timeline {
+  pointer-events: auto;
+  cursor: default;
+}
+
+.tl-timemarker.tl-timemarker-with-end {
+  opacity: 0.95;
+}
+
+.tl-timemarker-content h2.tl-headline {
+  font-size: 1rem !important;
+  font-weight: 600 !important;
+  line-height: 1.4 !important;
+}
+
+.tl-timemarker-text p {
+  font-size: 0.875rem !important;
+  line-height: 1.5 !important;
+}
+
+.tl-timenav {
+  border-top: 1px solid rgba(229, 231, 235, 0.3);
+  will-change: auto !important;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.tl-timemarker {
+  will-change: auto !important;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.tl-timenav-slider {
+  will-change: auto !important;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.tl-slidenav-next,
+.tl-slidenav-previous {
+  will-change: auto !important;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.tl-media {
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.timeline-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+}
+
+@media (max-width: 768px) {
+  .timeline-container {
+    height: 300px !important;
+  }
+
+  .tl-timemarker-content h2.tl-headline {
+    font-size: 0.875rem !important;
+  }
+
+  .tl-timemarker-text p {
+    font-size: 0.75rem !important;
+  }
+}
+
+.tl-menubar-button {
+  border-radius: 0.375rem;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.tl-timemarker:hover {
+  opacity: 1;
+}
+
+.tl-slidenav-next:hover,
+.tl-slidenav-previous:hover {
+  opacity: 0.9;
+}
+
+.tl-timeaxis {
+  will-change: auto !important;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.tl-timemarker-content-container {
+  will-change: auto !important;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+}
+
+.tl-menubar {
+  will-change: auto !important;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.tl-timenav-container {
+  will-change: auto !important;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.tl-timemarker-content-container {
+  height: auto !important;
+  min-height: unset !important;
+  max-height: fit-content !important;
+  padding: 6px 10px !important;
+}
+
+.tl-timemarker-content {
+  height: auto !important;
+  min-height: unset !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.tl-timemarker-content h2.tl-headline {
+  margin: 0 0 4px 0 !important;
+  padding: 0 !important;
+}
+
+.tl-timemarker-text {
+  height: auto !important;
+  min-height: unset !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.tl-timemarker-text p {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.tl-timemarker-media-container {
+  height: auto !important;
+  min-height: unset !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
